@@ -10,16 +10,18 @@ from io import StringIO
 
 st.title("Metrics Correlation")
 # Add a button for loading the sample CSV
-if st.button('Load Sample CSV'):
-    sample_csv_url = 'https://raw.githubusercontent.com/chrisschimkat/metriccorrelation/main/Book1.csv'
-    content = requests.get(sample_csv_url).content
-    uploaded_file = StringIO(content.decode('utf-8'))
+load_sample_csv = st.button('Load Sample CSV')
 
 # Add a download link for the example input file
 example_csv_link = '[here](https://raw.githubusercontent.com/chrisschimkat/metriccorrelation/main/Book1.csv?raw=true)'
 st.markdown(f"See example input file {example_csv_link} (right-click and choose 'Save link as...' to download)")
 
 uploaded_file = st.file_uploader("Upload a CSV file:", type=['csv'])
+
+if load_sample_csv:
+    sample_csv_url = 'https://raw.githubusercontent.com/chrisschimkat/metriccorrelation/main/Book1.csv'
+    content = requests.get(sample_csv_url).content
+    uploaded_file = StringIO(content.decode('utf-8'))
 
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
@@ -28,21 +30,38 @@ if uploaded_file is not None:
     df['Date'] = pd.to_datetime(df['Date'], dayfirst=True)
     df.set_index('Date', inplace=True)
 
-    def apply_decay(data, decay_rate):
-        decayed_data = data.copy()
-        for i in range(1, len(data)):
-            decayed_data.iloc[i] = decayed_data.iloc[i] + decayed_data.iloc[i - 1] * decay_rate
-        return decayed_data
+    # Calculate correlations and time lags for all pairs of series
+    corr_values = []
+    time_lags = []
+    for i, series1 in enumerate(df.columns):
+        for j, series2 in enumerate(df.columns):
+            if j <= i:
+                continue
+            corr = df[series1].corr(df[series2])
+            lag_range = np.arange(-30, 31)  # Range of time lags to consider
+            max_corr = -1
+            max_lag = 0
+            for lag in lag_range:
+                corr_lag = df[series1].corr(df[series2].shift(lag))
+                if abs(corr_lag) > abs(max_corr):
+                    max_corr = corr_lag
+                    max_lag = lag
+            corr_values.append(corr)
+            time_lags.append(max_lag)
 
-    decay_rate = 0.9
-    decayed_df = apply_decay(df, decay_rate)
-    decayed_correlations = decayed_df.corr()
+    # Create dataframe with correlations and time lags
+    correlations_df = pd.DataFrame({'Series 1': [df.columns[i] for i in range(len(df.columns)) for j in range(i+1, len(df.columns))],
+                                    'Series 2': [df.columns[j] for i in range(len(df.columns)) for j in range(i+1, len(df.columns))],
+                                    'Correlation': corr_values,
+                                    'Time lag (days)': time_lags})
+
+    correlations = df.corr()
 
     st.header("Correlation matrix")
 
     fig, ax = plt.subplots(figsize=(10, 8))
-    sns.heatmap(decayed_correlations, annot=True, fmt='.2f', cmap='plasma_r', vmin=-1, vmax=1, ax=ax)
-    ax.set_title('Correlations with decay effect')
+    sns.heatmap(correlations, annot=True, fmt='.2f', cmap='plasma_r', vmin=-1, vmax=1, ax=ax)
+    ax.set_title('Correlations')
     st.pyplot(fig)
 
     # Save the plot to a buffer
@@ -57,15 +76,11 @@ if uploaded_file is not None:
     # Export heatmap plot to PNG
     if st.button('Export heatmap plot to PNG'):
         st.download_button("Download heatmap plot", img_bytes, "heatmap_plot.png", "image/png")
-    
-    st.header("Top 10 correlations:")
-    
-    # Mask the lower triangle of the correlation matrix
-    mask = np.triu(np.ones_like(decayed_correlations, dtype=bool), k=1)
-    correlations_upper_triangle = decayed_correlations.where(mask)
 
-    top_10_correlations = correlations_upper_triangle.stack().nlargest(10)
-    st.write(top_10_correlations.to_frame('Correlation'))
+    st.header("Time lags between top 10 correlated metrics")
+
+    # Display time lags for top 10 correlations
+    st.write(correlations_df[['Series 1', 'Series 2', 'Correlation', 'Time lag (days)']])
 
     # Time series chart
     st.header("Time series chart for selected metrics")
@@ -74,11 +89,11 @@ if uploaded_file is not None:
 
     if len(selected_metrics) == 2:
         fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(decayed_df[selected_metrics[0]], label=selected_metrics[0])
+        ax.plot(df[selected_metrics[0]], label=selected_metrics[0])
         ax.set_ylabel(selected_metrics[0], fontsize=12)
 
         ax2 = ax.twinx()
-        ax2.plot(decayed_df[selected_metrics[1]], color='orange', label=selected_metrics[1])
+        ax2.plot(df[selected_metrics[1]], color='orange', label=selected_metrics[1])
         ax2.set_ylabel(selected_metrics[1], fontsize=12)
 
         ax.set_xlabel('Date', fontsize=12)
@@ -101,4 +116,3 @@ if uploaded_file is not None:
             st.download_button("Download time series plot", img_bytes, "time_series_plot.png", "image/png")
     else:
         st.warning("Please select exactly two metrics.")
-
